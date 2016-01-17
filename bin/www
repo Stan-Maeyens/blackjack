@@ -1,0 +1,334 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require('../app');
+var debug = require('debug')('BlackJack:server');
+var http = require('http');
+var io = require('socket.io');
+var freeIds = []; //ids worden incrementeel uitgedeeld, als er iemand disconnect, wordt zijn id weer beschikbaar
+var registered = []; //de username, color en cards van de gebruikers, gemapt op id
+var ids = {}; //id van de gebruiker, gemapt op de id van de socket van die gebruiker
+var cardsDealer = []; //kaarten van de dealer
+var gameStarted = false; 
+var numberPlayers = 0; //gebruikers die aan het spelen zijn (al klaar + nog bezig)
+var playersDone = 0; //gebruikers die busted zijn of die gestopt zijn
+var playerWaiting = 0; //gebruikers die moeten wachten tot het huidige spel gedaan is
+//alle kaarten, met hun aantal punten erbij. bij de azen staat er s (omdat dit 1 of 11 punten kan zijn)
+var cards = {'2c.png': 2, '3c.png': 3, '4c.png': 4, '5c.png': 5, '6c.png': 6, '7c.png': 7, '8c.png': 8, '9c.png': 9, '10c.png': 10, 'jc.png': 10, 'qc.png': 10, 'kc.png': 10, 'ac.png': 's',
+             '2d.png': 2, '3d.png': 3, '4d.png': 4, '5d.png': 5, '6d.png': 6, '7d.png': 7, '8d.png': 8, '9d.png': 9, '10d.png': 10, 'jd.png': 10, 'qd.png': 10, 'kd.png': 10, 'ad.png': 's',
+             '2h.png': 2, '3h.png': 3, '4h.png': 4, '5h.png': 5, '6h.png': 6, '7h.png': 7, '8h.png': 8, '9h.png': 9, '10h.png': 10, 'jh.png': 10, 'qh.png': 10, 'kh.png': 10, 'ah.png': 's',
+             '2s.png': 2, '3s.png': 3, '4s.png': 4, '5s.png': 5, '6s.png': 6, '7s.png': 7, '8s.png': 8, '9s.png': 9, '10s.png': 10, 'js.png': 10, 'qs.png': 10, 'ks.png': 10, 'as.png': 's'}
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '4444');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+var io = io.listen(server);
+//connectie maken
+io.on('connection', function(socket){
+  console.log('connection made!');
+  //alle huidige gebruikers opzoeken en doorgeven aan de nieuwe gebruiker
+  var users = {};
+  for(var key in ids){
+    var user = ids[key];
+    users[registered[user].username] = registered[user].color;
+  }
+  socket.emit('registeredusers', users);
+  
+  //connectie verloren of gebruiker is vertrokken 
+  socket.on('disconnect', function(){
+    console.log('lost');
+    if((socket.id in ids)){ //al geregistreerd?
+      var id = ids[socket.id];
+      console.log('connection lost! ' + registered[id].username);
+      io.emit('left', registered[id].username , registered[id].color); //aan andere gebruikers laten weten wie weg is
+      if(registered[id].sort == 'playing'){ //numbers in orde brengen
+        numberPlayers--;
+      }
+      else if(registered[id].sort == 'done'){
+        numberPlayers--;
+        playersDone--;
+      }
+      else{
+        playerWaiting--;
+      }
+      if(numberPlayers + playerWaiting == 0){ //als dit de laatste speler was
+        gameStarted = false;
+      }
+      console.log('done:'+playersDone+', playing:'+numberPlayers+', waiting:'+playerWaiting);
+      delete ids[socket.id]; //verwijderen uit arrays
+      delete registered[id];
+      freeIds.push(id); //id vrijgeven voor volgende gebruikers
+      console.log('freeIds: ' +freeIds);
+      if(numberPlayers == 0 && playerWaiting != 0){//als er nu niemand meer speelt, maar er wel aan het wachten zijn: nieuw spel starten
+        restartGame();
+      }
+    }
+  });
+
+  //gebruiker registreerd, username is al gecontroleerd op duplicatie
+  socket.on('register', function(usr, clr){
+    var id = getId(); //nieuw id aanvragen
+    ids[socket.id] = id;
+    console.log('register id: ' +  id);
+    registered[id] = {username: usr, color: clr, cards: []}; //username en color instellen
+    socket.emit('setid', id); //id doorgeven aan eigen socket
+    io.emit('registered', usr, clr); //registratie aan iedereen doorgeven
+
+    if(!gameStarted){ //eerste/enige gebruiker
+      numberPlayers++;
+      registered[id].sort = 'playing';
+      gameStarted = true;
+      socket.emit('gameover', -1, -1); //om eerste spel in te stellen (-1 is om te onderscheiden van echt spel)
+      cardsDealer = []; //deler opnieuw kaarten geven
+      for(var i = 0; i<2; i++){
+        var keys = Object.keys(cards);
+        var c = keys[Math.floor(Math.random()*keys.length)];
+        cardsDealer.push(c);
+        io.emit('dealer', c, countPoints('dealer')); //aan iedereen de kaart van de deler doorsturen
+      }
+      
+    }
+    else{
+      playerWaiting++; //niet eerste = wachten tot huidige spel gedaan is
+    }
+  });
+
+  //gebruiker stuurt chatmessage
+  socket.on('message', function(msg){
+    var id = ids[socket.id];
+    console.log('message: ' + registered[id].username + ': ' + msg);
+    io.emit('broadcast', msg, id, registered[id].username, registered[id].color);//naar iedereen doorsturen, met juiste username en color
+  });
+
+  //gebruiker wil weten of een username al in gebruik is
+  socket.on('checkusername', function(usr){
+    var unique = true;
+    for(var key in ids){
+      var user = ids[key];
+      if(registered[user].username == usr){
+        unique = false;
+      }
+    }
+    if(unique){
+      if(ids[socket.id]){//gebruiker al geregistreerd: username aanpassen in array
+        var id = ids[socket.id];
+        socket.broadcast.emit('usernamechange', registered[id].username, usr, registered[id].color); //aan de anderen laten weten dat hij veranderd is
+        registered[id].username = usr;
+      }
+      socket.emit('goodusername', usr);//naar eigen sturen dat de naam uniek is
+    }
+    else{
+      socket.emit('badusername', usr);//naar eigen sturen dat de naam niet uniek is
+    }
+  });
+
+  //gebruiker heeft zijn kleur aangepast
+  socket.on('changedcolor', function(clr){
+    var id = ids[socket.id];
+    registered[id].color = clr;
+    socket.broadcast.emit('colorchange', registered[id].username, clr);//aan de anderen laten weten dat zijn kleur veranderd is
+  });
+
+  //gebruiker wil een kaart trekken
+  socket.on('drawcard', function(){
+    var id = ids[socket.id];
+    var keys = Object.keys(cards);//random kaart kiezen
+    var c = keys[Math.floor(Math.random()*keys.length)];
+    registered[id].cards.push(c);//aan hand toevoegen
+    console.log('draw '+ c);
+    if(countPoints(id) > 21){//nu meer dan 21 punten?
+      console.log('busted: '+countPoints(id));
+      socket.emit('busted', c, countPoints(id)); //aan zichzelf laten weten dat hij busted is
+      playersDone++;
+      registered[id].sort == 'done'; //heeft gedaan met spelen in huidig spel
+      console.log('done:'+playersDone+', playing:'+numberPlayers+', waiting:'+playerWaiting);
+      if(playersDone == numberPlayers){ //iedereen gedaan? begin opnieuw
+        restartGame();
+      }
+    }
+    else{
+      socket.emit('drawn', c);//niet meer dan 21 punten
+    }
+  });
+
+  //gebruiker kiest om geen nieuwe kaarten meer te trekken
+  socket.on('stand', function(){
+    playersDone++;
+    console.log('done:'+playersDone+', playing:'+numberPlayers+', waiting:'+playerWaiting);
+    var id = ids[socket.id];
+    registered[id].sort == 'done';
+    if(playersDone == numberPlayers){ //iedereen gedaan? begin opnieuw
+      restartGame();
+    }
+  });
+
+  //toont punten van de spelers en begint nieuw spel 
+  function restartGame(){
+    for(var key in ids){//elke gebruiker overlopen
+      io.sockets.connected[key].emit('gameover', countPoints('dealer'), countPoints(ids[key]));//laat weten dat spel gedaan is en geef de scores
+      registered[ids[key]].cards = [];//hand leegmaken
+      registered[ids[key]].sort ='playing';//spelers die aan het wachten waren, kunnen vanaf nu ook meespelen
+    }
+
+    //deler kaarten geven
+    cardsDealer = [];
+    for(var i = 0; i<2; i++){
+      var keys = Object.keys(cards);
+      var c = keys[Math.floor(Math.random()*keys.length)];
+      cardsDealer.push(c);
+      io.emit('dealer', c, countPoints('dealer'));
+    }
+    console.log('done:'+playersDone+', playing:'+numberPlayers+', waiting:'+playerWaiting);
+    playersDone = 0;
+    numberPlayers += playerWaiting;
+    playerWaiting = 0;
+    console.log('done:'+playersDone+', playing:'+numberPlayers+', waiting:'+playerWaiting);
+    console.log('game restarted');
+  }  
+});
+
+
+server.on('error', onError);
+//server.on('listening', onListening);
+
+function getId(usr){
+  //var id = usr + ':' + idNr;
+  if(freeIds.length > 0){
+    var id = freeIds.shift()
+  }
+  else{
+    var id = registered.length;
+  }
+  return id;
+}
+
+function getIdNr(id){
+  var v = id.split(':');
+  return v[v.length-1];
+}
+
+function drawcard(id){
+  /*var keys = Object.keys(cards);
+  var c = keys[Math.floor(Math.random()*keys.length)];
+  if(id === 'dealer'){
+    cardsDealer.push(c);
+    if(countPoints('dealer') > 21) {
+    }
+  }
+  else
+  registered[id].cards.push('2c.png');
+  console.log('card ' + registered[id].cards);*/
+}
+
+function countPoints(id){
+  var p = 0;
+  var aces = 0;
+  if(id === 'dealer'){
+    for(var i=0; i<cardsDealer.length; i++){
+      if(cards[cardsDealer[i]] != 's'){
+        p+=cards[cardsDealer[i]];
+      }
+      else{
+        aces++;
+      }
+    }
+  }
+  else{
+    for(var i=0; i<registered[id].cards.length; i++){
+      if(cards[registered[id].cards[i]] != 's'){
+        p+=cards[registered[id].cards[i]];
+      }
+      else{
+        aces++;
+      }
+    }
+  }
+  while(aces>0){
+    if(p<=10 && 21-p-aces+1>=11){ //10 + 2 azen -> 12; 9 + 2 azen -> 21
+      p+=11;
+    }
+    else{
+      p+=1;
+    }
+    aces--;
+  }
+return p;
+}
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}

@@ -1,0 +1,17 @@
+Ik heb een blackjack/chat applicatie gemaakt.
+De belangerijkste bestanden zijn bin/www, public/javascripts/client.js en views/index.jade
+
+Het is mogelijk om 
+	-je te registreren, waarbij je een naam en kleur kan kiezen
+	-achteraf je naam en kleur te wijzigen
+	-te chatten met andere gebruikers
+	-blackjack te spelen (je moet wel wachten tot alle spelers in het huidige spel klaar zijn)
+		hierbij krijgt de deler 2 kaarten, die vanboven te zien zijn.
+		dan kan je kiezen of je kaarten trekt (draw)
+							of je kan stoppen met kaarten trekken (stand)
+		als je meer dan 21 hebt, is het meteen game over
+		als je stand en je hebt meer dan de deler, win je. Anders verlies je.
+		er komt pas op of je gewonnen hebt als alle spelers gedaan hebben. (spelers spelen simultaan)
+
+		Als iedere speler klaar is, krijgt de deler nieuwe kaarten en begint het opnieuw.
+		Er wordt rekening gehouden met het wegvallen van spelers in om het even welk stadium van het spel

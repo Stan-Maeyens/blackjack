@@ -1,0 +1,62 @@
+body {
+  background-color:rgb(192, 192, 192) !important;
+}
+
+
+#chat {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+}
+
+#chat form{  
+  padding: 3px; 
+}
+
+#chat form div input {
+  width: 100%
+}
+
+input {
+  width: 100%
+}
+
+button {
+  background: rgb(0, 0, 128) !important;
+  color: rgb(255, 255, 255) !important;
+  white-space: normal !important;
+  border: none; 
+}
+
+#chat form button { 
+
+}
+
+#scrollermessages{
+  overflow-y: auto;
+}
+#scrollerpeople {
+  overflow-y: auto;
+}
+
+.ownmessage {
+  clear: both;
+  float: right;
+  padding: 5px 10px; 
+  text-align: right;
+}
+
+#chat div div ul { 
+  list-style-type: none; 
+  padding: 0; 
+}
+
+.othermessage { 
+  clear: both;
+  float: left;
+  padding: 5px 10px; 
+}
+
+#messages li { 
+  /*background: rgb(255, 255, 255); */
+}
